@@ -251,6 +251,7 @@
     let saveTimeout = null;
     let keyHoldTimer = null;
     let pendingSave = false;
+    let autoRepeatUsingTurbo = false;   // 🚀 Tracks whether Auto Repeat runs in Turbo mode
 
     // 🚀 Turbo Mode state
     let turboEnabled = false;
@@ -677,15 +678,37 @@
       currentMantraImg = "";
     }
 
+    /* ============================================================
+       AUTO REPEAT — now uses Turbo loop when Turbo is ON
+       ============================================================ */
     function toggleAutoRepeat() {
       const button = document.getElementById("autoRepeatBtn");
-      const interval = parseFloat(document.getElementById("intervalSelect").value);
-      if (autoRepeatInterval) {
-        clearInterval(autoRepeatInterval);
-        autoRepeatInterval = null;
+      const isRunning = (autoRepeatInterval !== null) || autoRepeatUsingTurbo;
+
+      if (isRunning) {
+        // STOP
+        if (autoRepeatUsingTurbo) {
+          autoRepeatUsingTurbo = false;
+          stopTurbo();
+        } else {
+          clearInterval(autoRepeatInterval);
+          autoRepeatInterval = null;
+        }
         button.textContent = "Start Auto Repeat";
       } else {
-        autoRepeatInterval = setInterval(function() { repeatMantra(); }, interval);
+        // START
+        if (turboEnabled) {
+          // 🚀 Turbo mode ON → use the Turbo loop (supports Googolplex, Godmode, etc.)
+          if (!currentMantra) return;
+          autoRepeatUsingTurbo = true;
+          startTurbo();
+          document.getElementById("turboInfo").textContent =
+            "🚀 Auto Repeat running in Turbo mode.";
+        } else {
+          // Normal Auto Repeat
+          const interval = parseFloat(document.getElementById("intervalSelect").value) || 1000;
+          autoRepeatInterval = setInterval(function() { repeatMantra(); }, interval);
+        }
         button.textContent = "Stop Auto Repeat";
       }
     }
@@ -940,21 +963,22 @@
       const isEnter = (e.key === "Enter" || e.code === "NumpadEnter");
       const isCustom = (customKey && e.key === customKey);
       if (isEnter || isCustom) {
+        // Don't interrupt Auto Repeat that's running in Turbo mode
+        if (autoRepeatUsingTurbo) return;
         if (turboEnabled) stopTurbo();
         else stopKeyHold();
       }
     });
 
     window.addEventListener("blur", function() {
+      // Don't stop Turbo-Auto-Repeat on blur — user may have switched tabs intentionally
+      if (autoRepeatUsingTurbo) return;
       stopKeyHold();
       if (turboActive) stopTurbo();
     });
 
     /* ============================================================
        📱 MOBILE SUPPORT — pointer events for the Repeat button
-       Works on Android Chrome, iOS Safari, and desktop mice.
-       - Tap  = fire once (or a short burst)
-       - Hold = continuous blast at Turbo / Key-Hold speed
        ============================================================ */
     const repeatBtnEl = document.getElementById("repeatBtn");
 
@@ -967,6 +991,7 @@
 
       const endHold = function(e) {
         if (e && e.preventDefault) e.preventDefault();
+        if (autoRepeatUsingTurbo) return;   // Auto Repeat overrides manual hold
         if (turboEnabled) stopTurbo();
         else stopKeyHold();
       };
