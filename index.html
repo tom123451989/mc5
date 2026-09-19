@@ -37,6 +37,10 @@
       box-shadow: 0 0 25px rgba(76,175,80,0.7);
       animation: pulse-glow 1.5s infinite;
     }
+    #repeatBtn.normal-repeat-locked {
+      background: #2196F3;
+      box-shadow: 0 0 25px rgba(33,150,243,0.7);
+    }
     @keyframes pulse-glow {
       0%, 100% { box-shadow: 0 0 25px rgba(76,175,80,0.7); }
       50% { box-shadow: 0 0 40px rgba(76,175,80,1); }
@@ -141,7 +145,7 @@
 
   <div class="controls">
     <button id="repeatBtn">Repeat</button>
-    <div class="rc-hint">💡 Right-click Repeat: 1st = Turbo+Boost ON · 2nd = Turbo OFF (auto-repeat continues)</div>
+    <div class="rc-hint">💡 Right-click Repeat: toggle Turbo ↔ Normal auto-repeat</div>
     <button onclick="resetCount()">Reset</button>
     <button onclick="viewHistory()">History</button>
 
@@ -574,6 +578,13 @@
       else btn.classList.remove("turbo-locked");
     }
 
+    function setRepeatButtonNormalLock(on) {
+      const btn = document.getElementById("repeatBtn");
+      if (!btn) return;
+      if (on) btn.classList.add("normal-repeat-locked");
+      else btn.classList.remove("normal-repeat-locked");
+    }
+
     function formatHyper(state) {
       if (!state) return "";
       const op = state.op, base = state.base;
@@ -753,24 +764,41 @@
     }
 
     /* ============================================================
-       AUTO REPEAT — uses Turbo loop when Turbo is ON
+       ✅ NEW: Clean Auto-Repeat helpers
+       ============================================================ */
+    function startNormalAutoRepeat() {
+      stopNormalAutoRepeat();
+      const interval = parseFloat(document.getElementById("intervalSelect").value) || 1000;
+      autoRepeatInterval = setInterval(function() { repeatMantra(); }, interval);
+      console.log("[AutoRepeat] Normal started — interval " + interval + "ms");
+    }
+    function stopNormalAutoRepeat() {
+      if (autoRepeatInterval !== null) {
+        clearInterval(autoRepeatInterval);
+        autoRepeatInterval = null;
+        console.log("[AutoRepeat] Normal stopped");
+      }
+    }
+    function stopAllAutoRepeat() {
+      stopNormalAutoRepeat();
+      autoRepeatUsingTurbo = false;
+      rightClickBoostLock = false;
+      turboBoostActive = false;
+      setRepeatButtonTurboLock(false);
+      setRepeatButtonNormalLock(false);
+      if (turboActive) stopTurbo();
+    }
+
+    /* ============================================================
+       AUTO REPEAT BUTTON
        ============================================================ */
     function toggleAutoRepeat() {
       const button = document.getElementById("autoRepeatBtn");
       const isRunning = (autoRepeatInterval !== null) || autoRepeatUsingTurbo;
 
       if (isRunning) {
-        if (autoRepeatUsingTurbo) {
-          autoRepeatUsingTurbo = false;
-          rightClickBoostLock = false;
-          turboBoostActive = false;
-          stopTurbo();
-        } else {
-          clearInterval(autoRepeatInterval);
-          autoRepeatInterval = null;
-        }
+        stopAllAutoRepeat();
         button.textContent = "Start Auto Repeat";
-        setRepeatButtonTurboLock(false);
       } else {
         if (turboEnabled) {
           if (!currentMantra) return;
@@ -778,9 +806,11 @@
           startTurbo();
           setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor.toLocaleString("en-IN") + "× boost.", false);
           setRepeatButtonTurboLock(true);
+          setRepeatButtonNormalLock(false);
         } else {
-          const interval = parseFloat(document.getElementById("intervalSelect").value) || 1000;
-          autoRepeatInterval = setInterval(function() { repeatMantra(); }, interval);
+          startNormalAutoRepeat();
+          setRepeatButtonNormalLock(true);
+          setRepeatButtonTurboLock(false);
         }
         button.textContent = "Stop Auto Repeat";
       }
@@ -1130,16 +1160,16 @@
 
     /* ============================================================
        📱 MOBILE SUPPORT + 🖱️ RIGHT-CLICK TOGGLE
-       Right-click #1: Turbo + Boost ON (Auto Repeat switches to Turbo loop)
-       Right-click #2: Turbo OFF, but Auto Repeat continues at normal speed
-       Right-click #3: Turbo + Boost ON again
-       ... and so on.
+       Right-click cycles: Turbo+Boost ↔ Normal auto-repeat.
+       Both never stop; only the mode changes.
+       Stop Auto Repeat button stops everything.
        ============================================================ */
     const repeatBtnEl = document.getElementById("repeatBtn");
 
     if (repeatBtnEl) {
       repeatBtnEl.addEventListener("pointerdown", function(e) {
-        if (e.button !== 0 && e.pointerType === "mouse") return;
+        // Only left button / touch
+        if (e.pointerType === "mouse" && e.button !== 0) return;
         e.preventDefault();
         if (rightClickBoostLock) return;
         if (turboEnabled) {
@@ -1158,6 +1188,8 @@
       });
 
       const endHold = function(e) {
+        // Only left button / touch — ignore right-click pointerup
+        if (e && e.pointerType === "mouse" && e.button !== 0) return;
         if (e && e.preventDefault) e.preventDefault();
         if (rightClickBoostLock) return;
         if (turboBoostActive) {
@@ -1181,6 +1213,7 @@
       repeatBtnEl.addEventListener("pointercancel", endHold);
       repeatBtnEl.addEventListener("pointerleave", endHold);
 
+      /* 🖱️ RIGHT-CLICK: cycle Turbo ↔ Normal (auto-repeat always continues) */
       repeatBtnEl.addEventListener("contextmenu", function(e) {
         e.preventDefault();
         e.stopPropagation();
@@ -1188,78 +1221,84 @@
         const turboBtn = document.getElementById("turboBtn");
         const autoBtn = document.getElementById("autoRepeatBtn");
 
-        // CASE A: Turbo auto-repeat is running → switch to NORMAL auto-repeat (Turbo OFF)
+        // =============================================================
+        // CASE A: Turbo is active → switch to NORMAL auto-repeat
+        // =============================================================
         if (turboEnabled && autoRepeatUsingTurbo && turboActive) {
+          console.log("[RC] Case A: Turbo → Normal");
+
+          // Turn Turbo OFF but keep auto-repeat running
           turboEnabled = false;
           autoRepeatUsingTurbo = false;
           rightClickBoostLock = false;
           turboBoostActive = false;
-          stopTurbo();
+          stopTurbo();  // stops Turbo loop only
+
           turboBtn.textContent = "🚀 Turbo: OFF";
           turboBtn.classList.remove("on");
           setRepeatButtonTurboLock(false);
 
-          // Ensure normal auto-repeat is running
-          if (autoRepeatInterval === null) {
-            const interval = parseFloat(document.getElementById("intervalSelect").value) || 1000;
-            autoRepeatInterval = setInterval(function() { repeatMantra(); }, interval);
+          // Start NORMAL auto-repeat cleanly
+          if (currentMantra) {
+            startNormalAutoRepeat();
+            setRepeatButtonNormalLock(true);
+            autoBtn.textContent = "Stop Auto Repeat";
+            setTurboInfo("🚀 Turbo OFF — Auto Repeat continues at NORMAL speed. Right-click for Turbo.", false);
           }
-          autoBtn.textContent = "Stop Auto Repeat";
-          setTurboInfo("🚀 Turbo OFF — Auto Repeat continues at normal speed. Right-click for Turbo again.", false);
           return;
         }
 
-        // CASE B: Normal auto-repeat is running → switch back to Turbo + Boost
+        // =============================================================
+        // CASE B: Normal auto-repeat is running → switch to TURBO + BOOST
+        // =============================================================
         if (!turboEnabled && autoRepeatInterval !== null) {
-          clearInterval(autoRepeatInterval);
-          autoRepeatInterval = null;
+          console.log("[RC] Case B: Normal → Turbo");
+
+          stopNormalAutoRepeat();
+          setRepeatButtonNormalLock(false);
 
           turboEnabled = true;
           turboBtn.textContent = "🚀 Turbo: ON";
           turboBtn.classList.add("on");
 
-          if (!currentMantra) {
-            setTurboInfo("Turbo mode ON via right-click. Set a mantra to start counting.", false);
+          if (currentMantra) {
+            autoRepeatUsingTurbo = true;
+            rightClickBoostLock = true;
+            startTurbo();
+            turboBoostActive = true;
             setRepeatButtonTurboLock(true);
-            autoRepeatInterval = setInterval(function() { repeatMantra(); },
-              parseFloat(document.getElementById("intervalSelect").value) || 1000);
-            return;
+            autoBtn.textContent = "Stop Auto Repeat";
+            setTurboInfo("🚀 Turbo + BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " running. Right-click for NORMAL speed.", true);
+          } else {
+            // No mantra yet — just enable Turbo, leave nothing running
+            setTurboInfo("Turbo mode ON via right-click. Set a mantra to start counting.", false);
           }
-
-          autoRepeatUsingTurbo = true;
-          rightClickBoostLock = true;
-          startTurbo();
-          turboBoostActive = true;
-          autoBtn.textContent = "Stop Auto Repeat";
-          setRepeatButtonTurboLock(true);
-          setTurboInfo("🚀 Turbo + BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " running (right-click). Right-click again for normal speed.", true);
           return;
         }
 
-        // CASE C: Nothing running → start Turbo + Boost + Auto-repeat
-        if (autoRepeatInterval !== null) {
-          clearInterval(autoRepeatInterval);
-          autoRepeatInterval = null;
-        }
-        if (turboActive && !autoRepeatUsingTurbo) stopTurbo();
+        // =============================================================
+        // CASE C: Nothing running → start Turbo + Boost + auto-repeat
+        // =============================================================
+        console.log("[RC] Case C: Start fresh Turbo");
+
+        stopNormalAutoRepeat();
+        if (turboActive) stopTurbo();
 
         turboEnabled = true;
         turboBtn.textContent = "🚀 Turbo: ON";
         turboBtn.classList.add("on");
 
-        if (!currentMantra) {
-          setTurboInfo("Turbo mode ON via right-click. Set a mantra to start counting.", false);
+        if (currentMantra) {
+          autoRepeatUsingTurbo = true;
+          rightClickBoostLock = true;
+          startTurbo();
+          turboBoostActive = true;
           setRepeatButtonTurboLock(true);
-          return;
+          autoBtn.textContent = "Stop Auto Repeat";
+          setTurboInfo("🚀 Turbo + BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " running. Right-click for NORMAL speed.", true);
+        } else {
+          setTurboInfo("Turbo mode ON via right-click. Set a mantra to start counting.", false);
         }
-
-        autoRepeatUsingTurbo = true;
-        rightClickBoostLock = true;
-        startTurbo();
-        turboBoostActive = true;
-        autoBtn.textContent = "Stop Auto Repeat";
-        setRepeatButtonTurboLock(true);
-        setTurboInfo("🚀 Turbo + BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " running (right-click). Right-click again for normal speed.", true);
       });
     }
 
