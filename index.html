@@ -32,6 +32,15 @@
       touch-action: manipulation;
     }
     #repeatBtn { font-size: 90px; padding: 90px 150px; }
+    #repeatBtn.turbo-locked {
+      background: #4caf50;
+      box-shadow: 0 0 25px rgba(76,175,80,0.7);
+      animation: pulse-glow 1.5s infinite;
+    }
+    @keyframes pulse-glow {
+      0%, 100% { box-shadow: 0 0 25px rgba(76,175,80,0.7); }
+      50% { box-shadow: 0 0 40px rgba(76,175,80,1); }
+    }
     button:hover { box-shadow: 0 0 10px rgba(0,0,0,0.2); }
     .counter { font-size: 48px; margin: 20px 0; font-weight: bold; }
     .perceived { font-size: 48px; margin: 10px 0; font-weight: bold; color: var(--primary); }
@@ -92,6 +101,10 @@
       width: auto; background: var(--accent); font-weight: bold;
       color: var(--primary); font-size: 15px;
     }
+    .rc-hint {
+      font-size: 12px; color: #888; margin-top: 4px;
+      max-width: 420px;
+    }
   </style>
 </head>
 <body>
@@ -128,6 +141,7 @@
 
   <div class="controls">
     <button id="repeatBtn">Repeat</button>
+    <div class="rc-hint">💡 Right-click Repeat to toggle Turbo auto-run</div>
     <button onclick="resetCount()">Reset</button>
     <button onclick="viewHistory()">History</button>
 
@@ -205,6 +219,9 @@
         <option value="10" selected>10×</option>
         <option value="100">100×</option>
         <option value="1000">1000×</option>
+        <option value="10000">10,000×</option>
+        <option value="100000">1 Lakh× (1,00,000)</option>
+        <option value="10000000">1 Crore× (1,00,00,000)</option>
       </select>
     </label>
     <div id="turboInfo">Hold Enter (or custom key) to blast the counter.</div>
@@ -294,6 +311,7 @@
        ARBITRARY PRECISION HELPERS
        ============================================================ */
     const MAX_SAFE_EXP = 9007199254740991;
+    const MAX_ABSORB_EXP = 100000;   // max small exponent we can absorb into mantissa
 
     function bigZero() { return { m: 0n, e: 0 }; }
 
@@ -338,23 +356,33 @@
       return bigFromString(String(x)) || bigZero();
     }
 
-    /* 🐛 FIXED bigMul:
-       When one exponent is huge (Googolplex-class > 2^53), we CANNOT add
-       the small exponent to it (1e100 + 3 === 1e100 in float, so ×1000
-       was silently dropped). We absorb the small-exponent factor into
-       the mantissa instead. */
+    /* bigMul — handles huge exponents (Googolplex-class) by absorbing the
+       smaller-exponent operand into the mantissa. This makes 1000×,
+       10,000×, 1 Lakh×, and 1 Crore× boosts work correctly even in
+       Googolplex mode. */
     function bigMul(a, b) {
       a = toBig(a); b = toBig(b);
       const aHuge = Math.abs(a.e) > MAX_SAFE_EXP;
       const bHuge = Math.abs(b.e) > MAX_SAFE_EXP;
 
       if (aHuge || bHuge) {
+        // Both huge — approximate by adding exponents
+        if (aHuge && bHuge) {
+          const newE = a.e + b.e;
+          if (isFinite(newE)) {
+            return bigNormalize({ m: a.m * b.m, e: newE });
+          }
+          return bigNormalize({ m: a.m * b.m, e: a.e });
+        }
         const huge = aHuge ? a : b;
         const small = aHuge ? b : a;
-        if (Math.abs(small.e) <= 30 && small.e >= 0) {
+        // Absorb small into mantissa (avoids huge exponent + small exponent
+        // precision loss). Cap absorption to keep BigInt ops fast.
+        if (small.e >= 0 && small.e < MAX_ABSORB_EXP) {
           const absorbed = small.m * (10n ** BigInt(Math.round(small.e)));
           return bigNormalize({ m: huge.m * absorbed, e: huge.e });
         }
+        // Small exponent is negative or enormous — best-effort fallback
         return bigNormalize({ m: huge.m * small.m, e: huge.e });
       }
 
@@ -544,6 +572,13 @@
       info.textContent = message;
       if (boosting) info.classList.add("boosting");
       else info.classList.remove("boosting");
+    }
+
+    function setRepeatButtonTurboLock(on) {
+      const btn = document.getElementById("repeatBtn");
+      if (!btn) return;
+      if (on) btn.classList.add("turbo-locked");
+      else btn.classList.remove("turbo-locked");
     }
 
     function formatHyper(state) {
@@ -740,12 +775,14 @@
           autoRepeatInterval = null;
         }
         button.textContent = "Start Auto Repeat";
+        setRepeatButtonTurboLock(false);
       } else {
         if (turboEnabled) {
           if (!currentMantra) return;
           autoRepeatUsingTurbo = true;
           startTurbo();
           setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor + "× boost.", false);
+          setRepeatButtonTurboLock(true);
         } else {
           const interval = parseFloat(document.getElementById("intervalSelect").value) || 1000;
           autoRepeatInterval = setInterval(function() { repeatMantra(); }, interval);
@@ -836,7 +873,7 @@
       turboBoostFactor = parseInt(this.value) || 10;
       lsSet("turboBoostValue", this.value);
       if (turboActive) computeBoostedValues();
-      if (turboBoostActive) setTurboInfo("🚀 BOOST ×" + turboBoostFactor + " ACTIVE — release key to stop boost.", true);
+      if (turboBoostActive) setTurboInfo("🚀 BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " ACTIVE — release key to stop boost.", true);
     });
 
     function keyDisplayName(key) {
@@ -886,6 +923,7 @@
     function toggleTurbo() {
       turboEnabled = !turboEnabled;
       const btn = document.getElementById("turboBtn");
+      const autoBtn = document.getElementById("autoRepeatBtn");
       if (turboEnabled) {
         btn.textContent = "🚀 Turbo: ON";
         btn.classList.add("on");
@@ -894,6 +932,11 @@
         btn.textContent = "🚀 Turbo: OFF";
         btn.classList.remove("on");
         setTurboInfo("Hold Enter (or custom key) to blast the counter.", false);
+        if (autoRepeatUsingTurbo) {
+          autoRepeatUsingTurbo = false;
+          autoBtn.textContent = "Start Auto Repeat";
+        }
+        setRepeatButtonTurboLock(false);
         if (turboActive) stopTurbo();
       }
     }
@@ -938,7 +981,8 @@
         const batchSci = turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 0 };
         turboBoostedBatchSci = bigMul(batchSci, bigFromNumber(turboBoostFactor));
       } else if (turboMode === 2) {
-        const exp = Math.min(100 * turboBoostFactor, 100000);
+        // Multiply mode — cap exponent to avoid unstorable results
+        const exp = Math.min(100 * Math.max(turboBoostFactor, 1), 100000);
         turboBoostedMultiplier = bigPow(turboReps, exp);
       } else {
         const batchSci = turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 9 };
@@ -1044,7 +1088,7 @@
         if (turboActive) {
           if (!turboBoostActive) {
             turboBoostActive = true;
-            setTurboInfo("🚀 BOOST ×" + turboBoostFactor + " ACTIVE — release key to stop boost.", true);
+            setTurboInfo("🚀 BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " ACTIVE — release key to stop boost.", true);
           }
         } else {
           startTurbo();
@@ -1063,7 +1107,7 @@
       if (turboBoostActive) {
         turboBoostActive = false;
         if (autoRepeatUsingTurbo) {
-          setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor + "× boost.", false);
+          setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor.toLocaleString("en-IN") + "× boost.", false);
         }
         return;
       }
@@ -1084,18 +1128,19 @@
     });
 
     /* ============================================================
-       📱 MOBILE SUPPORT — pointer events on the Repeat button
+       📱 MOBILE SUPPORT + 🖱️ RIGHT-CLICK TOGGLE
        ============================================================ */
     const repeatBtnEl = document.getElementById("repeatBtn");
 
     if (repeatBtnEl) {
       repeatBtnEl.addEventListener("pointerdown", function(e) {
+        if (e.button !== 0 && e.pointerType === "mouse") return;
         e.preventDefault();
         if (turboEnabled) {
           if (turboActive) {
             if (!turboBoostActive) {
               turboBoostActive = true;
-              setTurboInfo("🚀 BOOST ×" + turboBoostFactor + " ACTIVE — release to stop boost.", true);
+              setTurboInfo("🚀 BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " ACTIVE — release to stop boost.", true);
             }
           } else {
             startTurbo();
@@ -1111,7 +1156,7 @@
         if (turboBoostActive) {
           turboBoostActive = false;
           if (autoRepeatUsingTurbo) {
-            setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor + "× boost.", false);
+            setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor.toLocaleString("en-IN") + "× boost.", false);
           }
           return;
         }
@@ -1128,12 +1173,56 @@
       repeatBtnEl.addEventListener("pointerup", endHold);
       repeatBtnEl.addEventListener("pointercancel", endHold);
       repeatBtnEl.addEventListener("pointerleave", endHold);
+
+      repeatBtnEl.addEventListener("contextmenu", function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+
+        const turboBtn = document.getElementById("turboBtn");
+        const autoBtn = document.getElementById("autoRepeatBtn");
+
+        if (turboEnabled && autoRepeatUsingTurbo && turboActive) {
+          turboEnabled = false;
+          autoRepeatUsingTurbo = false;
+          stopTurbo();
+          turboBtn.textContent = "🚀 Turbo: OFF";
+          turboBtn.classList.remove("on");
+          autoBtn.textContent = "Start Auto Repeat";
+          setRepeatButtonTurboLock(false);
+          setTurboInfo("Turbo mode turned OFF via right-click.", false);
+          return;
+        }
+
+        if (autoRepeatInterval !== null) {
+          clearInterval(autoRepeatInterval);
+          autoRepeatInterval = null;
+        }
+        if (turboActive && !autoRepeatUsingTurbo) stopTurbo();
+
+        turboEnabled = true;
+        turboBtn.textContent = "🚀 Turbo: ON";
+        turboBtn.classList.add("on");
+
+        if (!currentMantra) {
+          setTurboInfo("Turbo mode ON via right-click. Set a mantra to start counting.", false);
+          setRepeatButtonTurboLock(true);
+          return;
+        }
+
+        autoRepeatUsingTurbo = true;
+        startTurbo();
+        autoBtn.textContent = "Stop Auto Repeat";
+        setRepeatButtonTurboLock(true);
+        setTurboInfo("🚀 Turbo auto-repeat started via right-click. Right-click again to stop.", false);
+      });
     }
 
     document.addEventListener("contextmenu", function(e) {
       const el = e.target;
       const tag = (el && el.tagName) ? el.tagName.toLowerCase() : "";
-      if (tag === "button") e.preventDefault();
+      if (tag === "button" && el.id !== "repeatBtn") {
+        e.preventDefault();
+      }
     }, { passive: false });
 
     document.addEventListener("touchmove", function(e) {
