@@ -141,7 +141,7 @@
 
   <div class="controls">
     <button id="repeatBtn">Repeat</button>
-    <div class="rc-hint">💡 Right-click Repeat to toggle Turbo auto-run</div>
+    <div class="rc-hint">💡 Right-click Repeat to toggle Turbo + Boost auto-run</div>
     <button onclick="resetCount()">Reset</button>
     <button onclick="viewHistory()">History</button>
 
@@ -306,12 +306,13 @@
     let turboBoostedAddend = null;
     let turboBoostedMultiplier = null;
     let keyStartedTurbo = false;
+    let rightClickBoostLock = false;   // 🖱️ Tracks boost-lock from right-click mode
 
     /* ============================================================
        ARBITRARY PRECISION HELPERS
        ============================================================ */
     const MAX_SAFE_EXP = 9007199254740991;
-    const MAX_ABSORB_EXP = 100000;   // max small exponent we can absorb into mantissa
+    const MAX_ABSORB_EXP = 100000;
 
     function bigZero() { return { m: 0n, e: 0 }; }
 
@@ -356,17 +357,12 @@
       return bigFromString(String(x)) || bigZero();
     }
 
-    /* bigMul — handles huge exponents (Googolplex-class) by absorbing the
-       smaller-exponent operand into the mantissa. This makes 1000×,
-       10,000×, 1 Lakh×, and 1 Crore× boosts work correctly even in
-       Googolplex mode. */
     function bigMul(a, b) {
       a = toBig(a); b = toBig(b);
       const aHuge = Math.abs(a.e) > MAX_SAFE_EXP;
       const bHuge = Math.abs(b.e) > MAX_SAFE_EXP;
 
       if (aHuge || bHuge) {
-        // Both huge — approximate by adding exponents
         if (aHuge && bHuge) {
           const newE = a.e + b.e;
           if (isFinite(newE)) {
@@ -376,13 +372,10 @@
         }
         const huge = aHuge ? a : b;
         const small = aHuge ? b : a;
-        // Absorb small into mantissa (avoids huge exponent + small exponent
-        // precision loss). Cap absorption to keep BigInt ops fast.
         if (small.e >= 0 && small.e < MAX_ABSORB_EXP) {
           const absorbed = small.m * (10n ** BigInt(Math.round(small.e)));
           return bigNormalize({ m: huge.m * absorbed, e: huge.e });
         }
-        // Small exponent is negative or enormous — best-effort fallback
         return bigNormalize({ m: huge.m * small.m, e: huge.e });
       }
 
@@ -769,6 +762,8 @@
       if (isRunning) {
         if (autoRepeatUsingTurbo) {
           autoRepeatUsingTurbo = false;
+          rightClickBoostLock = false;
+          turboBoostActive = false;
           stopTurbo();
         } else {
           clearInterval(autoRepeatInterval);
@@ -781,7 +776,7 @@
           if (!currentMantra) return;
           autoRepeatUsingTurbo = true;
           startTurbo();
-          setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor + "× boost.", false);
+          setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor.toLocaleString("en-IN") + "× boost.", false);
           setRepeatButtonTurboLock(true);
         } else {
           const interval = parseFloat(document.getElementById("intervalSelect").value) || 1000;
@@ -873,7 +868,9 @@
       turboBoostFactor = parseInt(this.value) || 10;
       lsSet("turboBoostValue", this.value);
       if (turboActive) computeBoostedValues();
-      if (turboBoostActive) setTurboInfo("🚀 BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " ACTIVE — release key to stop boost.", true);
+      if (turboBoostActive) {
+        setTurboInfo("🚀 BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " ACTIVE — release key to stop boost.", true);
+      }
     });
 
     function keyDisplayName(key) {
@@ -936,6 +933,8 @@
           autoRepeatUsingTurbo = false;
           autoBtn.textContent = "Start Auto Repeat";
         }
+        rightClickBoostLock = false;
+        turboBoostActive = false;
         setRepeatButtonTurboLock(false);
         if (turboActive) stopTurbo();
       }
@@ -981,7 +980,6 @@
         const batchSci = turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 0 };
         turboBoostedBatchSci = bigMul(batchSci, bigFromNumber(turboBoostFactor));
       } else if (turboMode === 2) {
-        // Multiply mode — cap exponent to avoid unstorable results
         const exp = Math.min(100 * Math.max(turboBoostFactor, 1), 100000);
         turboBoostedMultiplier = bigPow(turboReps, exp);
       } else {
@@ -1086,6 +1084,8 @@
 
       if (turboEnabled) {
         if (turboActive) {
+          // If right-click already locked boost, ignore key
+          if (rightClickBoostLock) return;
           if (!turboBoostActive) {
             turboBoostActive = true;
             setTurboInfo("🚀 BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " ACTIVE — release key to stop boost.", true);
@@ -1103,6 +1103,9 @@
       const isEnter = (e.key === "Enter" || e.code === "NumpadEnter");
       const isCustom = (customKey && e.key === customKey);
       if (!isEnter && !isCustom) return;
+
+      // If right-click-lock is active, keys don't affect boost state
+      if (rightClickBoostLock) return;
 
       if (turboBoostActive) {
         turboBoostActive = false;
@@ -1128,7 +1131,7 @@
     });
 
     /* ============================================================
-       📱 MOBILE SUPPORT + 🖱️ RIGHT-CLICK TOGGLE
+       📱 MOBILE SUPPORT + 🖱️ RIGHT-CLICK TOGGLE (BOOST AUTO-APPLIED)
        ============================================================ */
     const repeatBtnEl = document.getElementById("repeatBtn");
 
@@ -1136,6 +1139,8 @@
       repeatBtnEl.addEventListener("pointerdown", function(e) {
         if (e.button !== 0 && e.pointerType === "mouse") return;
         e.preventDefault();
+        // If right-click mode has locked the boost, ignore pointer interaction
+        if (rightClickBoostLock) return;
         if (turboEnabled) {
           if (turboActive) {
             if (!turboBoostActive) {
@@ -1153,6 +1158,7 @@
 
       const endHold = function(e) {
         if (e && e.preventDefault) e.preventDefault();
+        if (rightClickBoostLock) return;
         if (turboBoostActive) {
           turboBoostActive = false;
           if (autoRepeatUsingTurbo) {
@@ -1174,6 +1180,7 @@
       repeatBtnEl.addEventListener("pointercancel", endHold);
       repeatBtnEl.addEventListener("pointerleave", endHold);
 
+      /* 🖱️ RIGHT-CLICK TOGGLE with auto-applied boost */
       repeatBtnEl.addEventListener("contextmenu", function(e) {
         e.preventDefault();
         e.stopPropagation();
@@ -1181,9 +1188,12 @@
         const turboBtn = document.getElementById("turboBtn");
         const autoBtn = document.getElementById("autoRepeatBtn");
 
+        // Second right-click: turn everything OFF
         if (turboEnabled && autoRepeatUsingTurbo && turboActive) {
           turboEnabled = false;
           autoRepeatUsingTurbo = false;
+          rightClickBoostLock = false;
+          turboBoostActive = false;
           stopTurbo();
           turboBtn.textContent = "🚀 Turbo: OFF";
           turboBtn.classList.remove("on");
@@ -1193,6 +1203,7 @@
           return;
         }
 
+        // First right-click: turn Turbo + Boost ON
         if (autoRepeatInterval !== null) {
           clearInterval(autoRepeatInterval);
           autoRepeatInterval = null;
@@ -1210,10 +1221,12 @@
         }
 
         autoRepeatUsingTurbo = true;
+        rightClickBoostLock = true;
         startTurbo();
+        turboBoostActive = true;   // Auto-apply boost from the start
         autoBtn.textContent = "Stop Auto Repeat";
         setRepeatButtonTurboLock(true);
-        setTurboInfo("🚀 Turbo auto-repeat started via right-click. Right-click again to stop.", false);
+        setTurboInfo("🚀 Turbo + BOOST ×" + turboBoostFactor.toLocaleString("en-IN") + " running (right-click). Right-click again to stop.", true);
       });
     }
 
