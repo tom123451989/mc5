@@ -23,7 +23,6 @@
     button {
       background: var(--primary); color: white; cursor: pointer;
       font-size: 30px; padding: 30px 50px; min-width: 250px; margin: 20px 0;
-      /* 📱 Mobile long-press protection */
       -webkit-touch-callout: none;
       -webkit-user-select: none;
       -moz-user-select: none;
@@ -84,7 +83,12 @@
       font-size: 12px; color: #888; margin-top: 4px; min-height: 16px;
       max-width: 420px;
     }
-    #turboSpeedSelect {
+    #turboInfo.boosting {
+      color: #ff1744;
+      font-weight: bold;
+      font-size: 14px;
+    }
+    #turboSpeedSelect, #turboBoostSelect {
       width: auto; background: var(--accent); font-weight: bold;
       color: var(--primary); font-size: 15px;
     }
@@ -193,6 +197,16 @@
         <option value="googolplex">Googolplex (10^10^100/tick)</option>
       </select>
     </label>
+    <label>
+      Boost (while holding):
+      <select id="turboBoostSelect">
+        <option value="1">1× (no boost)</option>
+        <option value="5">5×</option>
+        <option value="10" selected>10×</option>
+        <option value="100">100×</option>
+        <option value="1000">1000×</option>
+      </select>
+    </label>
     <div id="turboInfo">Hold Enter (or custom key) to blast the counter.</div>
 
     <label for="customKeyInput">
@@ -251,7 +265,7 @@
     let saveTimeout = null;
     let keyHoldTimer = null;
     let pendingSave = false;
-    let autoRepeatUsingTurbo = false;   // 🚀 Tracks whether Auto Repeat runs in Turbo mode
+    let autoRepeatUsingTurbo = false;
 
     // 🚀 Turbo Mode state
     let turboEnabled = false;
@@ -267,6 +281,15 @@
     let turboBatchSci = null;
     let turboBatchAddend = null;
     let turboBatchMultiplier = null;
+
+    // 🚀 BOOST: press Enter (or custom key / Repeat hold) during active Turbo
+    // to multiply the batch by turboBoostFactor.
+    let turboBoostFactor = 10;
+    let turboBoostActive = false;
+    let turboBoostedBatchSci = null;
+    let turboBoostedAddend = null;
+    let turboBoostedMultiplier = null;
+    let keyStartedTurbo = false;    // Did the current key press start the Turbo loop?
 
     /* ============================================================
        ARBITRARY PRECISION HELPERS
@@ -353,7 +376,6 @@
       const exp = a.e;
       const sciExp = digits - 1 + exp;
 
-      // HUGE EXPONENT territory — Googolplex and beyond
       if (Math.abs(exp) > MAX_SAFE_EXP) {
         let mantDisplay;
         if (digits <= 15) {
@@ -369,7 +391,6 @@
         return (neg ? "-" : "") + mantDisplay + " × 10^" + (exp < 0 ? "-" : "") + expDisplay;
       }
 
-      // Normal-range handling
       let flatLen;
       if (sciExp < 0) flatLen = digits - sciExp + 1;
       else flatLen = sciExp + 1;
@@ -498,6 +519,14 @@
       el.className = "";
       if (state) el.classList.add(state);
       el.textContent = message || "";
+    }
+
+    function setTurboInfo(message, boosting) {
+      const info = document.getElementById("turboInfo");
+      if (!info) return;
+      info.textContent = message;
+      if (boosting) info.classList.add("boosting");
+      else info.classList.remove("boosting");
     }
 
     function formatHyper(state) {
@@ -679,14 +708,13 @@
     }
 
     /* ============================================================
-       AUTO REPEAT — now uses Turbo loop when Turbo is ON
+       AUTO REPEAT — uses Turbo loop when Turbo is ON
        ============================================================ */
     function toggleAutoRepeat() {
       const button = document.getElementById("autoRepeatBtn");
       const isRunning = (autoRepeatInterval !== null) || autoRepeatUsingTurbo;
 
       if (isRunning) {
-        // STOP
         if (autoRepeatUsingTurbo) {
           autoRepeatUsingTurbo = false;
           stopTurbo();
@@ -696,16 +724,12 @@
         }
         button.textContent = "Start Auto Repeat";
       } else {
-        // START
         if (turboEnabled) {
-          // 🚀 Turbo mode ON → use the Turbo loop (supports Googolplex, Godmode, etc.)
           if (!currentMantra) return;
           autoRepeatUsingTurbo = true;
           startTurbo();
-          document.getElementById("turboInfo").textContent =
-            "🚀 Auto Repeat running in Turbo mode.";
+          setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor + "× boost.", false);
         } else {
-          // Normal Auto Repeat
           const interval = parseFloat(document.getElementById("intervalSelect").value) || 1000;
           autoRepeatInterval = setInterval(function() { repeatMantra(); }, interval);
         }
@@ -761,6 +785,14 @@
       select.value = chosen;
       applyTurboSpeed(chosen);
     }
+    function loadSavedBoost() {
+      const saved = lsGet("turboBoostValue", "10");
+      const select = document.getElementById("turboBoostSelect");
+      const validOption = Array.from(select.options).some(o => o.value === saved);
+      const chosen = validOption ? saved : "10";
+      select.value = chosen;
+      turboBoostFactor = parseInt(chosen) || 10;
+    }
 
     document.getElementById("customNumberInput").addEventListener("input", function() {
       lsSet("customNumberValue", this.value.trim());
@@ -781,6 +813,13 @@
     document.getElementById("turboSpeedSelect").addEventListener("change", function() {
       applyTurboSpeed(this.value);
       lsSet("turboSpeedValue", this.value);
+      if (turboActive) computeBoostedValues();
+    });
+    document.getElementById("turboBoostSelect").addEventListener("change", function() {
+      turboBoostFactor = parseInt(this.value) || 10;
+      lsSet("turboBoostValue", this.value);
+      if (turboActive) computeBoostedValues();
+      if (turboBoostActive) setTurboInfo("🚀 BOOST ×" + turboBoostFactor + " ACTIVE — release key to stop boost.", true);
     });
 
     function keyDisplayName(key) {
@@ -833,13 +872,11 @@
       if (turboEnabled) {
         btn.textContent = "🚀 Turbo: ON";
         btn.classList.add("on");
-        document.getElementById("turboInfo").textContent =
-          "Turbo ON — hold Enter/custom key to blast the counter.";
+        setTurboInfo("Turbo ON — hold Enter/custom key to blast the counter.", false);
       } else {
         btn.textContent = "🚀 Turbo: OFF";
         btn.classList.remove("on");
-        document.getElementById("turboInfo").textContent =
-          "Hold Enter (or custom key) to blast the counter.";
+        setTurboInfo("Hold Enter (or custom key) to blast the counter.", false);
         if (turboActive) stopTurbo();
       }
     }
@@ -859,15 +896,40 @@
         const parsed = parseRepetitionValue(raw);
         turboReps = parsed.sci;
         count = toBig(count);
+      }
 
-        if (op === 2) {
-          turboBatchMultiplier = bigPow(turboReps, 100);
-          turboBatchAddend = null;
-        } else {
-          const batchSci = turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 9 };
-          turboBatchAddend = bigMul(turboReps, batchSci);
-          turboBatchMultiplier = null;
-        }
+      // Base batch values
+      if (turboHyper) {
+        turboBatchAddend = null;
+        turboBatchMultiplier = null;
+      } else if (op === 2) {
+        turboBatchMultiplier = bigPow(turboReps, 100);
+        turboBatchAddend = null;
+      } else {
+        const batchSci = turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 9 };
+        turboBatchAddend = bigMul(turboReps, batchSci);
+        turboBatchMultiplier = null;
+      }
+      computeBoostedValues();
+    }
+
+    /* Precompute boosted batch variants (used when Enter is held during
+       an already-running Turbo loop, e.g. Auto Repeat). */
+    function computeBoostedValues() {
+      turboBoostedBatchSci = null;
+      turboBoostedAddend = null;
+      turboBoostedMultiplier = null;
+      if (turboBoostFactor <= 1) return;
+      if (turboHyper) {
+        const batchSci = turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 0 };
+        turboBoostedBatchSci = bigMul(batchSci, bigFromNumber(turboBoostFactor));
+      } else if (turboMode === 2) {
+        const exp = Math.min(100 * turboBoostFactor, 100000);
+        turboBoostedMultiplier = bigPow(turboReps, exp);
+      } else {
+        const batchSci = turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 9 };
+        const boostedBatch = bigMul(batchSci, bigFromNumber(turboBoostFactor));
+        turboBoostedAddend = bigMul(turboReps, boostedBatch);
       }
     }
 
@@ -885,6 +947,8 @@
 
     function stopTurbo() {
       turboActive = false;
+      turboBoostActive = false;
+      keyStartedTurbo = false;
       if (turboMathTimer !== null) {
         clearTimeout(turboMathTimer);
         turboMathTimer = null;
@@ -900,26 +964,32 @@
           storeDailyCount(currentMantra, dailyInc);
         }
       }
-      // ✅ Turbo uses the same 5-second debounce as everything else
       if (currentUserId && currentMantra) {
         scheduleCloudSave();
       }
       const elapsed = ((performance.now() - turboStartedAt) / 1000).toFixed(1);
-      const info = document.getElementById("turboInfo");
-      if (info) info.textContent = "🚀 Turbo burst: " + elapsed + " sec — "
-        + (hyperState ? formatHyper(hyperState) : bigToDisplay(count));
+      setTurboInfo("🚀 Turbo burst: " + elapsed + " sec — "
+        + (hyperState ? formatHyper(hyperState) : bigToDisplay(count)), false);
     }
 
     function turboMathTick() {
       if (!turboActive) return;
 
       if (turboHyper) {
-        const batchSci = turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 0 };
+        const batchSci = (turboBoostActive && turboBoostedBatchSci)
+          ? turboBoostedBatchSci
+          : (turboBatchSci || bigFromNumber(turboBatch) || { m: 1n, e: 0 });
         hyperState.iter = iterAdd(hyperState.iter, batchSci);
       } else if (turboMode === 2) {
-        count = bigMul(count, turboBatchMultiplier);
+        const mult = (turboBoostActive && turboBoostedMultiplier)
+          ? turboBoostedMultiplier
+          : turboBatchMultiplier;
+        count = bigMul(count, mult);
       } else {
-        count = bigAdd(count, turboBatchAddend);
+        const addend = (turboBoostActive && turboBoostedAddend)
+          ? turboBoostedAddend
+          : turboBatchAddend;
+        count = bigAdd(count, addend);
       }
 
       turboFrames++;
@@ -955,43 +1025,90 @@
       else if (isCustom && !inInput) shouldTrigger = true;
       if (!shouldTrigger) return;
       e.preventDefault();
-      if (turboEnabled) startTurbo();
-      else startKeyHold();
+
+      if (turboEnabled) {
+        if (turboActive) {
+          // Turbo already running (e.g. Auto Repeat) → activate BOOST
+          if (!turboBoostActive) {
+            turboBoostActive = true;
+            setTurboInfo("🚀 BOOST ×" + turboBoostFactor + " ACTIVE — release key to stop boost.", true);
+          }
+        } else {
+          startTurbo();
+          keyStartedTurbo = true;
+        }
+      } else {
+        startKeyHold();
+      }
     });
 
     document.addEventListener("keyup", function(e) {
       const isEnter = (e.key === "Enter" || e.code === "NumpadEnter");
       const isCustom = (customKey && e.key === customKey);
-      if (isEnter || isCustom) {
-        // Don't interrupt Auto Repeat that's running in Turbo mode
-        if (autoRepeatUsingTurbo) return;
-        if (turboEnabled) stopTurbo();
-        else stopKeyHold();
+      if (!isEnter && !isCustom) return;
+
+      // Turn off boost first
+      if (turboBoostActive) {
+        turboBoostActive = false;
+        if (autoRepeatUsingTurbo) {
+          setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor + "× boost.", false);
+        }
+        return;
       }
+      if (autoRepeatUsingTurbo) return;
+      if (keyStartedTurbo) {
+        keyStartedTurbo = false;
+        stopTurbo();
+        return;
+      }
+      if (turboEnabled) stopTurbo();
+      else stopKeyHold();
     });
 
     window.addEventListener("blur", function() {
-      // Don't stop Turbo-Auto-Repeat on blur — user may have switched tabs intentionally
       if (autoRepeatUsingTurbo) return;
       stopKeyHold();
       if (turboActive) stopTurbo();
     });
 
     /* ============================================================
-       📱 MOBILE SUPPORT — pointer events for the Repeat button
+       📱 MOBILE SUPPORT — pointer events on the Repeat button
        ============================================================ */
     const repeatBtnEl = document.getElementById("repeatBtn");
 
     if (repeatBtnEl) {
       repeatBtnEl.addEventListener("pointerdown", function(e) {
         e.preventDefault();
-        if (turboEnabled) startTurbo();
-        else startKeyHold();
+        if (turboEnabled) {
+          if (turboActive) {
+            if (!turboBoostActive) {
+              turboBoostActive = true;
+              setTurboInfo("🚀 BOOST ×" + turboBoostFactor + " ACTIVE — release to stop boost.", true);
+            }
+          } else {
+            startTurbo();
+            keyStartedTurbo = true;
+          }
+        } else {
+          startKeyHold();
+        }
       });
 
       const endHold = function(e) {
         if (e && e.preventDefault) e.preventDefault();
-        if (autoRepeatUsingTurbo) return;   // Auto Repeat overrides manual hold
+        if (turboBoostActive) {
+          turboBoostActive = false;
+          if (autoRepeatUsingTurbo) {
+            setTurboInfo("🚀 Auto Repeat running in Turbo mode. Hold Enter for " + turboBoostFactor + "× boost.", false);
+          }
+          return;
+        }
+        if (autoRepeatUsingTurbo) return;
+        if (keyStartedTurbo) {
+          keyStartedTurbo = false;
+          stopTurbo();
+          return;
+        }
         if (turboEnabled) stopTurbo();
         else stopKeyHold();
       };
@@ -1001,16 +1118,12 @@
       repeatBtnEl.addEventListener("pointerleave", endHold);
     }
 
-    /* Block Android Chrome's "open in new tab" long-press menu on buttons */
     document.addEventListener("contextmenu", function(e) {
       const el = e.target;
       const tag = (el && el.tagName) ? el.tagName.toLowerCase() : "";
-      if (tag === "button") {
-        e.preventDefault();
-      }
+      if (tag === "button") e.preventDefault();
     }, { passive: false });
 
-    /* Prevent the page from scrolling or zooming while holding a button */
     document.addEventListener("touchmove", function(e) {
       const el = e.target;
       const tag = (el && el.tagName) ? el.tagName.toLowerCase() : "";
@@ -1169,6 +1282,7 @@
       loadSavedCustomNumber();
       loadSavedOperation();
       loadSavedTurboSpeed();
+      loadSavedBoost();
       const savedKey = lsGet("customKeyMapping", "");
       if (savedKey) setCustomKey(savedKey);
       updateDisplay();
