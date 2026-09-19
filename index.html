@@ -282,14 +282,13 @@
     let turboBatchAddend = null;
     let turboBatchMultiplier = null;
 
-    // 🚀 BOOST: press Enter (or custom key / Repeat hold) during active Turbo
-    // to multiply the batch by turboBoostFactor.
+    // 🚀 BOOST state
     let turboBoostFactor = 10;
     let turboBoostActive = false;
     let turboBoostedBatchSci = null;
     let turboBoostedAddend = null;
     let turboBoostedMultiplier = null;
-    let keyStartedTurbo = false;    // Did the current key press start the Turbo loop?
+    let keyStartedTurbo = false;
 
     /* ============================================================
        ARBITRARY PRECISION HELPERS
@@ -339,8 +338,26 @@
       return bigFromString(String(x)) || bigZero();
     }
 
+    /* 🐛 FIXED bigMul:
+       When one exponent is huge (Googolplex-class > 2^53), we CANNOT add
+       the small exponent to it (1e100 + 3 === 1e100 in float, so ×1000
+       was silently dropped). We absorb the small-exponent factor into
+       the mantissa instead. */
     function bigMul(a, b) {
       a = toBig(a); b = toBig(b);
+      const aHuge = Math.abs(a.e) > MAX_SAFE_EXP;
+      const bHuge = Math.abs(b.e) > MAX_SAFE_EXP;
+
+      if (aHuge || bHuge) {
+        const huge = aHuge ? a : b;
+        const small = aHuge ? b : a;
+        if (Math.abs(small.e) <= 30 && small.e >= 0) {
+          const absorbed = small.m * (10n ** BigInt(Math.round(small.e)));
+          return bigNormalize({ m: huge.m * absorbed, e: huge.e });
+        }
+        return bigNormalize({ m: huge.m * small.m, e: huge.e });
+      }
+
       return bigNormalize({ m: a.m * b.m, e: a.e + b.e });
     }
 
@@ -898,7 +915,6 @@
         count = toBig(count);
       }
 
-      // Base batch values
       if (turboHyper) {
         turboBatchAddend = null;
         turboBatchMultiplier = null;
@@ -913,8 +929,6 @@
       computeBoostedValues();
     }
 
-    /* Precompute boosted batch variants (used when Enter is held during
-       an already-running Turbo loop, e.g. Auto Repeat). */
     function computeBoostedValues() {
       turboBoostedBatchSci = null;
       turboBoostedAddend = null;
@@ -1028,7 +1042,6 @@
 
       if (turboEnabled) {
         if (turboActive) {
-          // Turbo already running (e.g. Auto Repeat) → activate BOOST
           if (!turboBoostActive) {
             turboBoostActive = true;
             setTurboInfo("🚀 BOOST ×" + turboBoostFactor + " ACTIVE — release key to stop boost.", true);
@@ -1047,7 +1060,6 @@
       const isCustom = (customKey && e.key === customKey);
       if (!isEnter && !isCustom) return;
 
-      // Turn off boost first
       if (turboBoostActive) {
         turboBoostActive = false;
         if (autoRepeatUsingTurbo) {
