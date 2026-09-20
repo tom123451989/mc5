@@ -509,15 +509,6 @@
       return { sci: v, num: num, scientific: scientific };
     }
 
-    /* ============================================================
-       ITER HELPERS — FIXED iterAdd
-       -----------------------------------------------------------
-       Previously, when `iter` had a huge exponent (e.g. 10^(10^100))
-       and we tried to add a tiny amount (like +1), the bigAdd
-       dominant-term shortcut discarded the +1 entirely.
-       This version absorbs small addends directly into the mantissa
-       so normal-mode counting works visibly even at Googolplex scale.
-       ============================================================ */
     function iterAsSci(iter) {
       if (iter === null || iter === undefined) return { m: 0n, e: 0 };
       if (typeof iter === "object" && typeof iter.m === "bigint") return iter;
@@ -538,7 +529,6 @@
       let result;
 
       if (aHuge && !bHuge) {
-        // a has huge exponent — absorb b into a's mantissa
         if (b.e >= 0 && b.e < MAX_ABSORB_EXP) {
           const bMant = b.m * (10n ** BigInt(Math.round(b.e)));
           result = { m: a.m + bMant, e: a.e };
@@ -564,6 +554,45 @@
         if (Number.isSafeInteger(n) && Math.abs(n) < 1e15) return n;
       }
       return result;
+    }
+
+    /* 🐛 Firestore cannot serialize BigInt. Convert hyperState to a plain
+       JSON-friendly form before saving, and restore it on load. */
+    function sanitizeHyperState(state) {
+      if (!state) return null;
+      const out = { base: state.base, op: state.op };
+      const iter = state.iter;
+      if (typeof iter === "number") {
+        out.iter = iter;
+      } else if (typeof iter === "bigint") {
+        out.iter = iter.toString();
+      } else if (iter && typeof iter === "object" && typeof iter.m === "bigint") {
+        out.iter = { m: iter.m.toString(), e: iter.e };
+      } else {
+        out.iter = 0;
+      }
+      return out;
+    }
+
+    function restoreHyperState(data) {
+      if (!data) return null;
+      const iter = data.iter;
+      let restoredIter;
+      if (typeof iter === "number") {
+        restoredIter = iter;
+      } else if (typeof iter === "string") {
+        const sci = bigFromString(iter);
+        restoredIter = sci || parseInt(iter, 10) || 0;
+      } else if (iter && typeof iter === "object" && typeof iter.m === "string") {
+        try {
+          restoredIter = { m: BigInt(iter.m), e: iter.e };
+        } catch (e) {
+          restoredIter = 0;
+        }
+      } else {
+        restoredIter = 0;
+      }
+      return { base: data.base, op: data.op, iter: restoredIter };
     }
 
     function lsGet(key, fallback) {
@@ -1334,7 +1363,7 @@
       const dataToSave = {
         currentMantra: currentMantra,
         count: hyperState ? formatHyper(hyperState) : bigToStorage(count),
-        hyperState: hyperState,
+        hyperState: sanitizeHyperState(hyperState),
         customNumberValue: lsGet('customNumberValue', ''),
         perPressValue: lsGet('perPressValue', '1'),
         operationValue: document.getElementById("operationSelect").value,
@@ -1371,7 +1400,7 @@
             document.getElementById('currentMantra').textContent = 'Current: "' + currentMantra + '"';
           }
           if (data.hyperState) {
-            hyperState = data.hyperState;
+            hyperState = restoreHyperState(data.hyperState);
             count = bigZero();
           } else {
             hyperState = null;
